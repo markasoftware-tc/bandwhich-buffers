@@ -55,5 +55,6 @@ pub(crate) fn get_open_sockets() -> OpenSockets {
 
     OpenSockets {
         sockets_to_procs: open_sockets,
+        tcp_connections_to_buffer_fill: Default::default(),
     }
 }

@@ -5,5 +5,8 @@ pub(crate) fn get_open_sockets() -> OpenSockets {
         .filter_map(|raw| raw.as_local_socket().map(|s| (s, raw.proc_info)))
         .collect();
 
-    OpenSockets { sockets_to_procs }
+    OpenSockets {
+        sockets_to_procs,
+        tcp_connections_to_buffer_fill: Default::default(),
+    }
 }

@@ -9,7 +9,7 @@ use log::warn;
 
 use crate::{
     display::BandwidthUnitFamily,
-    network::{Connection, LocalSocket, Utilization},
+    network::{Connection, LocalSocket, TcpBufferFill, Utilization},
     os::ProcessInfo,
 };
 
@@ -36,6 +36,7 @@ pub struct ConnectionData {
     pub total_bytes_uploaded: u128,
     pub process_name: String,
     pub interface_name: String,
+    pub tcp_buffer_fill: Option<TcpBufferFill>,
 }
 
 impl Bandwidth for NetworkData {
@@ -66,6 +67,15 @@ impl Bandwidth for ConnectionData {
     fn combine_bandwidth(&mut self, other: &ConnectionData) {
         self.total_bytes_downloaded += other.get_total_bytes_downloaded();
         self.total_bytes_uploaded += other.get_total_bytes_uploaded();
+        if !other.process_name.is_empty() {
+            self.process_name.clone_from(&other.process_name);
+        }
+        if !other.interface_name.is_empty() {
+            self.interface_name.clone_from(&other.interface_name);
+        }
+        if other.tcp_buffer_fill.is_some() {
+            self.tcp_buffer_fill = other.tcp_buffer_fill;
+        }
     }
     fn divide_by(&mut self, amount: u128) {
         self.total_bytes_downloaded /= amount;
@@ -75,6 +85,7 @@ impl Bandwidth for ConnectionData {
 
 pub struct UtilizationData {
     connections_to_procs: HashMap<LocalSocket, ProcessInfo>,
+    tcp_connections_to_buffer_fill: HashMap<Connection, TcpBufferFill>,
     network_utilization: Utilization,
 }
 
@@ -102,10 +113,12 @@ impl UIState {
     pub fn update(
         &mut self,
         connections_to_procs: HashMap<LocalSocket, ProcessInfo>,
+        tcp_connections_to_buffer_fill: HashMap<Connection, TcpBufferFill>,
         network_utilization: Utilization,
     ) {
         self.utilization_data.push_back(UtilizationData {
             connections_to_procs,
+            tcp_connections_to_buffer_fill,
             network_utilization,
         });
         if self.utilization_data.len() > RECALL_LENGTH {
@@ -120,6 +133,7 @@ impl UIState {
         let mut seen_connections = HashSet::new();
         for state in self.utilization_data.iter().rev() {
             let connections_to_procs = &state.connections_to_procs;
+            let tcp_connections_to_buffer_fill = &state.tcp_connections_to_buffer_fill;
             let network_utilization = &state.network_utilization;
 
             for (connection, connection_info) in &network_utilization.connections {
@@ -133,6 +147,10 @@ impl UIState {
                 connection_data
                     .interface_name
                     .clone_from(&connection_info.interface_name);
+                if connection_data.tcp_buffer_fill.is_none() {
+                    connection_data.tcp_buffer_fill =
+                        tcp_connections_to_buffer_fill.get(connection).copied();
+                }
                 data_for_remote_address.total_bytes_downloaded +=
                     connection_info.total_bytes_downloaded;
                 data_for_remote_address.total_bytes_uploaded +=
@@ -290,4 +308,79 @@ where
     }
 
     bandwidth_list
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::HashMap,
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+    };
+
+    use crate::{
+        network::{BufferFill, Connection, ConnectionInfo, Protocol, TcpBufferFill, Utilization},
+        os::ProcessInfo,
+    };
+
+    use super::UIState;
+
+    #[test]
+    fn latest_tcp_buffer_fill_wins_across_recall_window() {
+        let connection = Connection::new(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 12345),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+            443,
+            Protocol::Tcp,
+        );
+        let mut state = UIState::default();
+
+        state.update(
+            HashMap::from([(connection.local_socket, ProcessInfo::new("proc", 1))]),
+            HashMap::from([(
+                connection,
+                TcpBufferFill::new(BufferFill::try_new(10, 100), BufferFill::try_new(20, 100)),
+            )]),
+            Utilization {
+                connections: HashMap::from([(
+                    connection,
+                    ConnectionInfo {
+                        interface_name: "eth0".to_string(),
+                        total_bytes_downloaded: 1,
+                        total_bytes_uploaded: 2,
+                    },
+                )]),
+            },
+        );
+        state.update(
+            HashMap::from([(connection.local_socket, ProcessInfo::new("proc", 1))]),
+            HashMap::from([(
+                connection,
+                TcpBufferFill::new(BufferFill::try_new(30, 100), BufferFill::try_new(40, 100)),
+            )]),
+            Utilization {
+                connections: HashMap::from([(
+                    connection,
+                    ConnectionInfo {
+                        interface_name: "eth0".to_string(),
+                        total_bytes_downloaded: 3,
+                        total_bytes_uploaded: 4,
+                    },
+                )]),
+            },
+        );
+
+        let (_, connection_data) = state
+            .connections
+            .iter()
+            .find(|(candidate, _)| *candidate == connection)
+            .expect("connection should be present");
+
+        assert_eq!(
+            connection_data.tcp_buffer_fill,
+            Some(TcpBufferFill::new(
+                BufferFill::try_new(30, 100),
+                BufferFill::try_new(40, 100),
+            ))
+        );
+    }
 }

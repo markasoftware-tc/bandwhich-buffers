@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fmt,
     net::{IpAddr, SocketAddr},
+    num::NonZeroU32,
 };
 
 #[derive(PartialEq, Hash, Eq, Clone, PartialOrd, Ord, Debug, Copy)]
@@ -27,6 +28,58 @@ impl fmt::Display for Protocol {
             Protocol::Tcp => write!(f, "tcp"),
             Protocol::Udp => write!(f, "udp"),
         }
+    }
+}
+
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub struct BufferFill {
+    used: u32,
+    capacity: NonZeroU32,
+}
+
+impl BufferFill {
+    pub fn try_new(used: u32, capacity: u32) -> Option<Self> {
+        Some(Self {
+            used,
+            capacity: NonZeroU32::new(capacity)?,
+        })
+    }
+
+    pub fn fullness_percentage(self) -> u16 {
+        ((u128::from(self.used) * 100) / u128::from(self.capacity.get()))
+            .try_into()
+            .unwrap()
+    }
+}
+
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub struct TcpBufferFill {
+    pub snd: Option<BufferFill>,
+    pub rcv: Option<BufferFill>,
+}
+
+impl TcpBufferFill {
+    pub fn new(snd: Option<BufferFill>, rcv: Option<BufferFill>) -> Self {
+        assert!(
+            snd.is_some() || rcv.is_some(),
+            "tcp buffer fill must have at least one populated side"
+        );
+        Self { snd, rcv }
+    }
+}
+
+impl fmt::Display for TcpBufferFill {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let snd = self
+            .snd
+            .map(|fill| format!("{}%", fill.fullness_percentage()))
+            .unwrap_or_else(|| "--".to_string());
+        let rcv = self
+            .rcv
+            .map(|fill| format!("{}%", fill.fullness_percentage()))
+            .unwrap_or_else(|| "--".to_string());
+
+        write!(f, "{snd}/{rcv}")
     }
 }
 
@@ -100,6 +153,18 @@ pub fn display_connection_string(
     )
 }
 
+pub fn display_tcp_buffer_fill(
+    connection: &Connection,
+    tcp_buffer_fill: Option<TcpBufferFill>,
+) -> String {
+    match connection.local_socket.protocol {
+        Protocol::Tcp => tcp_buffer_fill
+            .map(|fill| fill.to_string())
+            .unwrap_or_else(|| "--/--".to_string()),
+        Protocol::Udp => "--/--".to_string(),
+    }
+}
+
 impl Connection {
     pub fn new(
         remote_socket: SocketAddr,
@@ -118,5 +183,63 @@ impl Connection {
                 protocol,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, net::Ipv4Addr};
+
+    use super::{
+        display_connection_string, display_tcp_buffer_fill, BufferFill, Connection, Protocol,
+        TcpBufferFill,
+    };
+
+    #[test]
+    fn display_connection_string_stays_focused_on_endpoints() {
+        let connection = Connection::new(
+            (Ipv4Addr::new(1, 1, 1, 1), 12345).into(),
+            Ipv4Addr::new(10, 0, 0, 2).into(),
+            443,
+            Protocol::Tcp,
+        );
+
+        let rendered = display_connection_string(&connection, &HashMap::new(), "eth0");
+
+        assert_eq!(rendered, "<eth0>:443 => 1.1.1.1:12345 (tcp)");
+    }
+
+    #[test]
+    fn display_tcp_buffer_fill_formats_tcp_percentages() {
+        let connection = Connection::new(
+            (Ipv4Addr::new(1, 1, 1, 1), 12345).into(),
+            Ipv4Addr::new(10, 0, 0, 2).into(),
+            443,
+            Protocol::Tcp,
+        );
+
+        let rendered = display_tcp_buffer_fill(
+            &connection,
+            Some(TcpBufferFill::new(
+                BufferFill::try_new(50, 100),
+                BufferFill::try_new(25, 100),
+            )),
+        );
+
+        assert_eq!(rendered, "50%/25%");
+    }
+
+    #[test]
+    fn display_tcp_buffer_fill_uses_placeholder_for_udp() {
+        let connection = Connection::new(
+            (Ipv4Addr::new(1, 1, 1, 1), 12345).into(),
+            Ipv4Addr::new(10, 0, 0, 2).into(),
+            443,
+            Protocol::Udp,
+        );
+
+        let rendered = display_tcp_buffer_fill(&connection, None);
+
+        assert_eq!(rendered, "--/--");
     }
 }

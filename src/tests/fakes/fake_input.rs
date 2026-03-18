@@ -138,14 +138,13 @@ pub fn get_open_sockets() -> OpenSockets {
         ProcessInfo::new("1", 1),
     );
     let mut local_socket_to_procs = HashMap::new();
-    let mut connections = std::vec::Vec::new();
     for (connection, proc_info) in open_sockets {
         local_socket_to_procs.insert(connection.local_socket, proc_info);
-        connections.push(connection);
     }
 
     OpenSockets {
         sockets_to_procs: local_socket_to_procs,
+        tcp_connections_to_buffer_fill: Default::default(),
     }
 }
 

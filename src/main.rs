@@ -27,7 +27,7 @@ use display::{elapsed_time, RawTerminalBackend, Ui};
 use eyre::bail;
 use network::{
     dns::{self, IpTable},
-    LocalSocket, Sniffer, Utilization,
+    Connection, LocalSocket, Sniffer, TcpBufferFill, Utilization,
 };
 use pnet::datalink::{DataLinkReceiver, NetworkInterface};
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -81,6 +81,7 @@ fn main() -> eyre::Result<()> {
 
 pub struct OpenSockets {
     sockets_to_procs: HashMap<LocalSocket, ProcessInfo>,
+    tcp_connections_to_buffer_fill: HashMap<Connection, TcpBufferFill>,
 }
 
 pub struct OsInputOutput {
@@ -140,7 +141,10 @@ where
                 while running.load(Ordering::Acquire) {
                     let render_start_time = Instant::now();
                     let utilization = network_utilization.lock().unwrap().clone_and_reset();
-                    let OpenSockets { sockets_to_procs } = get_open_sockets();
+                    let OpenSockets {
+                        sockets_to_procs,
+                        tcp_connections_to_buffer_fill,
+                    } = get_open_sockets();
                     let mut ip_to_host = IpTable::new();
                     if let Some(dns_client) = dns_client.as_mut() {
                         ip_to_host = dns_client.cache();
@@ -157,7 +161,12 @@ where
                         let paused = paused.load(Ordering::SeqCst);
                         let table_cycle_offset = table_cycle_offset.load(Ordering::SeqCst);
                         if !paused {
-                            ui.update_state(sockets_to_procs, utilization, ip_to_host);
+                            ui.update_state(
+                                sockets_to_procs,
+                                tcp_connections_to_buffer_fill,
+                                utilization,
+                                ip_to_host,
+                            );
                         }
                         let elapsed_time = elapsed_time(
                             *last_start_time.read().unwrap(),

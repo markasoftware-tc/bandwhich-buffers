@@ -9,7 +9,10 @@ use crate::{
         components::{HeaderDetails, HelpText, Layout, Table},
         UIState,
     },
-    network::{display_connection_string, display_ip_or_host, LocalSocket, Utilization},
+    network::{
+        display_connection_string, display_ip_or_host, display_tcp_buffer_fill, LocalSocket,
+        Utilization,
+    },
     os::ProcessInfo,
 };
 
@@ -71,7 +74,7 @@ where
             |write_to_stdout: &mut (dyn FnMut(&str) + Send), no_traffic: &mut bool| {
                 for (connection, connection_network_data) in &state.connections {
                     write_to_stdout(&format!(
-                        "connection: <{timestamp}> {} up/down Bps: {}/{} process: \"{}\"",
+                        "connection: <{timestamp}> {} up/down Bps: {}/{} process: \"{}\" snd/rcv fill: {}",
                         display_connection_string(
                             connection,
                             ip_to_host,
@@ -79,7 +82,8 @@ where
                         ),
                         connection_network_data.total_bytes_uploaded,
                         connection_network_data.total_bytes_downloaded,
-                        connection_network_data.process_name
+                        connection_network_data.process_name,
+                        display_tcp_buffer_fill(connection, connection_network_data.tcp_buffer_fill),
                     ));
                     *no_traffic = false;
                 }
@@ -180,10 +184,18 @@ where
     pub fn update_state(
         &mut self,
         connections_to_procs: HashMap<LocalSocket, ProcessInfo>,
+        tcp_connections_to_buffer_fill: HashMap<
+            crate::network::Connection,
+            crate::network::TcpBufferFill,
+        >,
         utilization: Utilization,
         ip_to_host: HashMap<IpAddr, String>,
     ) {
-        self.state.update(connections_to_procs, utilization);
+        self.state.update(
+            connections_to_procs,
+            tcp_connections_to_buffer_fill,
+            utilization,
+        );
         self.ip_to_host.extend(ip_to_host);
     }
     pub fn end(&mut self) {

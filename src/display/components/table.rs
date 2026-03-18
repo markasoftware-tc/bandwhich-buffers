@@ -12,7 +12,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
     display::{Bandwidth, BandwidthUnitFamily, DisplayBandwidth, UIState},
-    network::{display_connection_string, display_ip_or_host},
+    network::{display_connection_string, display_ip_or_host, display_tcp_buffer_fill},
 };
 
 /// The displayed layout choice of a table.
@@ -207,14 +207,15 @@ impl Table {
         let title = "Utilization by connection";
         let width_cutoffs = vec![
             (0, D::C2([32, 18])),
-            (80, D::C3([36, 12, 18])),
-            (100, D::C3([54, 18, 22])),
-            (120, D::C3([72, 24, 22])),
+            (90, D::C3([48, 12, 18])),
+            (120, D::C4([58, 16, 12, 18])),
+            (160, D::C4([80, 20, 14, 22])),
         ];
 
         let column_names = [
             "Connection",
             "Process",
+            "Buffers",
             if state.cumulative_mode {
                 "Data (Up / Down)"
             } else {
@@ -232,6 +233,7 @@ impl Table {
                         &connection_data.interface_name,
                     ),
                     connection_data.process_name.to_string(),
+                    display_tcp_buffer_fill(connection, connection_data.tcp_buffer_fill),
                     display_upload_and_download(
                         connection_data,
                         state.unit_family,
@@ -241,9 +243,9 @@ impl Table {
             })
             .collect();
         let column_selector = Rc::new(|layout: &D| match layout {
-            D::C2(_) => vec![0, 2],
-            D::C3(_) => vec![0, 1, 2],
-            D::C4(_) => unreachable!(),
+            D::C2(_) => vec![0, 3],
+            D::C3(_) => vec![0, 2, 3],
+            D::C4(_) => vec![0, 1, 2, 3],
         });
 
         Table {
